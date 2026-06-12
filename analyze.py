@@ -98,6 +98,22 @@ def central_roi(image: np.ndarray, fraction: float = ROI_FRACTION) -> np.ndarray
     return image[y0:y0 + crop_h, x0:x0 + crop_w]
 
 
+def image_size(image: np.ndarray) -> dict[str, int]:
+    """Return image dimensions as width/height metadata."""
+    height, width = image.shape[:2]
+    return {"width": int(width), "height": int(height)}
+
+
+def central_roi_coordinates(image: np.ndarray, fraction: float = ROI_FRACTION) -> dict[str, int]:
+    """Return the central ROI coordinates relative to the source image."""
+    height, width = image.shape[:2]
+    crop_w = int(width * fraction)
+    crop_h = int(height * fraction)
+    x0 = (width - crop_w) // 2
+    y0 = (height - crop_h) // 2
+    return {"x": x0, "y": y0, "width": crop_w, "height": crop_h}
+
+
 def redness_mask(image_bgr: np.ndarray, saturation_min: int = SATURATION_MIN) -> np.ndarray:
     """Binary mask of red-ish pixels using two HSV hue bands around red.
 
@@ -284,8 +300,14 @@ def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object
 
     Raises AnalyzeError if either image fails to decode.
     """
-    yesterday = central_roi(resize_to_width(decode_image(yesterday_bytes)))
-    today = central_roi(resize_to_width(decode_image(today_bytes)))
+    yesterday_original = decode_image(yesterday_bytes)
+    today_original = decode_image(today_bytes)
+    yesterday_resized = resize_to_width(yesterday_original)
+    today_resized = resize_to_width(today_original)
+    yesterday_roi_coordinates = central_roi_coordinates(yesterday_resized)
+    today_roi_coordinates = central_roi_coordinates(today_resized)
+    yesterday = central_roi(yesterday_resized)
+    today = central_roi(today_resized)
 
     threshold_results = [score_at_threshold(yesterday, today, s) for s in SATURATION_THRESHOLDS]
     valid_results = [result for result in threshold_results if result["used_for_score"]]
@@ -340,6 +362,17 @@ def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object
         "combined_bbox_today": features["combined_bbox_today"],
         "redness_note": redness_note,
         "note": "non-diagnostic visual features only",
+        "preprocessing": {
+            "target_width": TARGET_WIDTH,
+            "roi_fraction": ROI_FRACTION,
+            "roi_method": "central_crop",
+            "yesterday_original_size": image_size(yesterday_original),
+            "today_original_size": image_size(today_original),
+            "yesterday_resized_size": image_size(yesterday_resized),
+            "today_resized_size": image_size(today_resized),
+            "yesterday_roi_coordinates": yesterday_roi_coordinates,
+            "today_roi_coordinates": today_roi_coordinates,
+        },
     }
 
     return {
