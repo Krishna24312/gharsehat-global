@@ -44,6 +44,12 @@ SATURATION_THRESHOLDS = [80, 100, 120]
 MIN_RED_AREA_PIXELS = 100  # ignore thresholds with too little yesterday red
 ROI_FRACTION = 0.85  # central 85% width and height
 
+# Pair-level comparability warnings. These are debug-only and do not affect
+# visual metrics or scoring.
+BRIGHTNESS_MISMATCH_THRESHOLD = 35.0
+LOW_SATURATION_ROI_THRESHOLD = 25.0
+TINY_VISUAL_REGION_FRACTION = 0.005
+
 # Supporting non-diagnostic visual features (dark / yellow / combined region).
 # These describe visual area change only — never necrosis, pus, slough, or
 # depth. Dark = very low brightness; yellow/cream = warm mid-hue region.
@@ -324,6 +330,39 @@ def compute_visual_features(
     }
 
 
+def comparability_warnings(
+    yesterday_color_spaces: dict[str, np.ndarray],
+    today_color_spaces: dict[str, np.ndarray],
+    features: dict[str, object],
+) -> list[str]:
+    """Return non-blocking warnings about whether the ROI pair is comparable."""
+    yesterday_brightness = float(yesterday_color_spaces["gray"].mean())
+    today_brightness = float(today_color_spaces["gray"].mean())
+    yesterday_saturation = float(yesterday_color_spaces["hsv"][:, :, 1].mean())
+    today_saturation = float(today_color_spaces["hsv"][:, :, 1].mean())
+
+    yesterday_visual_area = int(features["combined_area_yesterday"])
+    today_visual_area = int(features["combined_area_today"])
+    yesterday_visual_fraction = yesterday_visual_area / max(
+        int(yesterday_color_spaces["gray"].size), 1
+    )
+    today_visual_fraction = today_visual_area / max(int(today_color_spaces["gray"].size), 1)
+    minimum_visual_fraction = min(yesterday_visual_fraction, today_visual_fraction)
+
+    warnings: list[str] = []
+    if abs(today_brightness - yesterday_brightness) >= BRIGHTNESS_MISMATCH_THRESHOLD:
+        warnings.append("brightness_mismatch_between_images")
+    if min(yesterday_saturation, today_saturation) < LOW_SATURATION_ROI_THRESHOLD:
+        warnings.append("low_saturation_roi")
+    if yesterday_visual_area == 0 or today_visual_area == 0:
+        warnings.append("empty_visual_mask")
+    elif minimum_visual_fraction < TINY_VISUAL_REGION_FRACTION:
+        warnings.append("tiny_visual_region")
+    if warnings:
+        warnings.append("images_may_not_be_comparable")
+    return warnings
+
+
 def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object]:
     """Compare two wound photos and return a visual-change result dict.
 
@@ -403,6 +442,7 @@ def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object
     )
     visual_support_score = max(features["wound_area_delta"], features["combined_border_change"])
     change_score = max(redness_score, visual_support_score)
+    warnings = comparability_warnings(yesterday_color_spaces, today_color_spaces, features)
 
     debug: dict[str, object] = {
         "method": "multi_feature_visual_change_roi",
@@ -423,6 +463,7 @@ def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object
         "combined_bbox_today": features["combined_bbox_today"],
         "redness_note": redness_note,
         "note": "non-diagnostic visual features only",
+        "warnings": warnings,
         "color_spaces_used": ["BGR", "RGB", "HSV", "LAB", "YCrCb", "grayscale"],
         "preprocessing": {
             "target_width": TARGET_WIDTH,
