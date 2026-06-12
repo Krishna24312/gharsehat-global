@@ -114,13 +114,29 @@ def central_roi_coordinates(image: np.ndarray, fraction: float = ROI_FRACTION) -
     return {"x": x0, "y": y0, "width": crop_w, "height": crop_h}
 
 
-def redness_mask(image_bgr: np.ndarray, saturation_min: int = SATURATION_MIN) -> np.ndarray:
+def convert_color_spaces(image_bgr: np.ndarray) -> dict[str, np.ndarray]:
+    """Convert one BGR image into the color spaces used for visual analysis."""
+    return {
+        "bgr": image_bgr,
+        "rgb": cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB),
+        "hsv": cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV),
+        "lab": cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB),
+        "ycrcb": cv2.cvtColor(image_bgr, cv2.COLOR_BGR2YCrCb),
+        "gray": cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY),
+    }
+
+
+def redness_mask(
+    image_bgr: np.ndarray,
+    saturation_min: int = SATURATION_MIN,
+    color_spaces: dict[str, np.ndarray] | None = None,
+) -> np.ndarray:
     """Binary mask of red-ish pixels using two HSV hue bands around red.
 
     `saturation_min` is exposed so callers can sweep it. Higher values exclude
     more normal skin.
     """
-    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    hsv = (color_spaces or convert_color_spaces(image_bgr))["hsv"]
     lower_red = cv2.inRange(hsv, np.array([0, saturation_min, VALUE_MIN]), np.array([15, 255, 255]))
     upper_red = cv2.inRange(hsv, np.array([160, saturation_min, VALUE_MIN]), np.array([180, 255, 255]))
     mask = cv2.bitwise_or(lower_red, upper_red)
@@ -147,24 +163,28 @@ def bounding_box_area(mask: np.ndarray) -> int:
     return int(width * height)
 
 
-def dark_mask(image_bgr: np.ndarray) -> np.ndarray:
+def dark_mask(
+    image_bgr: np.ndarray, color_spaces: dict[str, np.ndarray] | None = None
+) -> np.ndarray:
     """Mask of very dark visual regions (low brightness) in the ROI.
 
     Non-diagnostic: this is "dark visual area" only, never necrosis or depth.
     """
-    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    hsv = (color_spaces or convert_color_spaces(image_bgr))["hsv"]
     mask = cv2.inRange(hsv, np.array([0, 0, 0]), np.array([180, 255, DARK_VALUE_MAX]))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, KERNEL)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, KERNEL)
     return mask
 
 
-def yellow_mask(image_bgr: np.ndarray) -> np.ndarray:
+def yellow_mask(
+    image_bgr: np.ndarray, color_spaces: dict[str, np.ndarray] | None = None
+) -> np.ndarray:
     """Mask of yellow/cream visual regions in the ROI.
 
     Non-diagnostic: this is "yellow/cream visual area" only, never pus or slough.
     """
-    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    hsv = (color_spaces or convert_color_spaces(image_bgr))["hsv"]
     mask = cv2.inRange(
         hsv,
         np.array([YELLOW_HUE_LOW, YELLOW_SAT_MIN, YELLOW_VALUE_MIN]),
@@ -191,7 +211,11 @@ def clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
 
 
 def score_at_threshold(
-    yesterday_roi: np.ndarray, today_roi: np.ndarray, saturation: int
+    yesterday_roi: np.ndarray,
+    today_roi: np.ndarray,
+    saturation: int,
+    yesterday_color_spaces: dict[str, np.ndarray] | None = None,
+    today_color_spaces: dict[str, np.ndarray] | None = None,
 ) -> dict[str, object]:
     """Run the redness comparison at one saturation threshold.
 
@@ -200,8 +224,16 @@ def score_at_threshold(
     redness_delta/border_change, the change_score, and why it was kept or
     excluded.
     """
-    yesterday_mask = redness_mask(yesterday_roi, saturation_min=saturation)
-    today_mask = redness_mask(today_roi, saturation_min=saturation)
+    yesterday_mask = redness_mask(
+        yesterday_roi,
+        saturation_min=saturation,
+        color_spaces=yesterday_color_spaces,
+    )
+    today_mask = redness_mask(
+        today_roi,
+        saturation_min=saturation,
+        color_spaces=today_color_spaces,
+    )
 
     yesterday_red = red_area(yesterday_mask)
     today_red = red_area(today_mask)
@@ -237,7 +269,11 @@ def score_at_threshold(
 
 
 def compute_visual_features(
-    yesterday_roi: np.ndarray, today_roi: np.ndarray, red_saturation: int
+    yesterday_roi: np.ndarray,
+    today_roi: np.ndarray,
+    red_saturation: int,
+    yesterday_color_spaces: dict[str, np.ndarray] | None = None,
+    today_color_spaces: dict[str, np.ndarray] | None = None,
 ) -> dict[str, object]:
     """Compute supporting non-diagnostic visual-area metrics on the ROI.
 
@@ -246,12 +282,20 @@ def compute_visual_features(
     deltas are area increases clamped to 0-100. Reports visual area only —
     never necrosis, pus, slough, or depth.
     """
-    dark_y_mask = dark_mask(yesterday_roi)
-    dark_t_mask = dark_mask(today_roi)
-    yellow_y_mask = yellow_mask(yesterday_roi)
-    yellow_t_mask = yellow_mask(today_roi)
-    red_y_mask = redness_mask(yesterday_roi, saturation_min=red_saturation)
-    red_t_mask = redness_mask(today_roi, saturation_min=red_saturation)
+    dark_y_mask = dark_mask(yesterday_roi, color_spaces=yesterday_color_spaces)
+    dark_t_mask = dark_mask(today_roi, color_spaces=today_color_spaces)
+    yellow_y_mask = yellow_mask(yesterday_roi, color_spaces=yesterday_color_spaces)
+    yellow_t_mask = yellow_mask(today_roi, color_spaces=today_color_spaces)
+    red_y_mask = redness_mask(
+        yesterday_roi,
+        saturation_min=red_saturation,
+        color_spaces=yesterday_color_spaces,
+    )
+    red_t_mask = redness_mask(
+        today_roi,
+        saturation_min=red_saturation,
+        color_spaces=today_color_spaces,
+    )
 
     # Approximate visual region = red OR dark OR yellow (not true segmentation).
     combined_y_mask = cv2.bitwise_or(cv2.bitwise_or(red_y_mask, dark_y_mask), yellow_y_mask)
@@ -308,8 +352,19 @@ def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object
     today_roi_coordinates = central_roi_coordinates(today_resized)
     yesterday = central_roi(yesterday_resized)
     today = central_roi(today_resized)
+    yesterday_color_spaces = convert_color_spaces(yesterday)
+    today_color_spaces = convert_color_spaces(today)
 
-    threshold_results = [score_at_threshold(yesterday, today, s) for s in SATURATION_THRESHOLDS]
+    threshold_results = [
+        score_at_threshold(
+            yesterday,
+            today,
+            s,
+            yesterday_color_spaces=yesterday_color_spaces,
+            today_color_spaces=today_color_spaces,
+        )
+        for s in SATURATION_THRESHOLDS
+    ]
     valid_results = [result for result in threshold_results if result["used_for_score"]]
 
     # --- Primary redness score (existing behavior, unchanged) ---
@@ -339,7 +394,13 @@ def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object
 
     # --- Supporting non-diagnostic visual features ---
     # Combined region uses the selected red threshold (default when none chosen).
-    features = compute_visual_features(yesterday, today, selected_threshold or SATURATION_MIN)
+    features = compute_visual_features(
+        yesterday,
+        today,
+        selected_threshold or SATURATION_MIN,
+        yesterday_color_spaces=yesterday_color_spaces,
+        today_color_spaces=today_color_spaces,
+    )
     visual_support_score = max(features["wound_area_delta"], features["combined_border_change"])
     change_score = max(redness_score, visual_support_score)
 
@@ -362,6 +423,7 @@ def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object
         "combined_bbox_today": features["combined_bbox_today"],
         "redness_note": redness_note,
         "note": "non-diagnostic visual features only",
+        "color_spaces_used": ["BGR", "RGB", "HSV", "LAB", "YCrCb", "grayscale"],
         "preprocessing": {
             "target_width": TARGET_WIDTH,
             "roi_fraction": ROI_FRACTION,
