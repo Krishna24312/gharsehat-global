@@ -363,6 +363,69 @@ def comparability_warnings(
     return warnings
 
 
+def brightness_delta(
+    yesterday_color_spaces: dict[str, np.ndarray],
+    today_color_spaces: dict[str, np.ndarray],
+) -> float:
+    """Absolute difference in mean grayscale brightness between the two ROIs."""
+    yesterday_mean = float(yesterday_color_spaces["gray"].mean())
+    today_mean = float(today_color_spaces["gray"].mean())
+    return round(abs(today_mean - yesterday_mean), 2)
+
+
+def lab_color_delta(
+    yesterday_color_spaces: dict[str, np.ndarray],
+    today_color_spaces: dict[str, np.ndarray],
+) -> float:
+    """Euclidean distance between the mean LAB channel values of both ROIs."""
+    yesterday_mean = yesterday_color_spaces["lab"].mean(axis=(0, 1))
+    today_mean = today_color_spaces["lab"].mean(axis=(0, 1))
+    return round(float(np.linalg.norm(today_mean - yesterday_mean)), 2)
+
+
+def edge_change(
+    yesterday_color_spaces: dict[str, np.ndarray],
+    today_color_spaces: dict[str, np.ndarray],
+) -> float:
+    """Absolute percentage change in Canny edge-pixel count between both ROIs."""
+    yesterday_edges = cv2.Canny(yesterday_color_spaces["gray"], 100, 200)
+    today_edges = cv2.Canny(today_color_spaces["gray"], 100, 200)
+    yesterday_count = int(cv2.countNonZero(yesterday_edges))
+    today_count = int(cv2.countNonZero(today_edges))
+    change = abs(today_count - yesterday_count) / max(yesterday_count, 1) * 100
+    return round(change, 2)
+
+
+def histogram_change(
+    yesterday_color_spaces: dict[str, np.ndarray],
+    today_color_spaces: dict[str, np.ndarray],
+) -> float:
+    """Bhattacharyya distance between normalized 2D HSV histograms."""
+    yesterday_hist = cv2.calcHist(
+        [yesterday_color_spaces["hsv"]], [0, 1], None, [50, 60], [0, 180, 0, 256]
+    )
+    today_hist = cv2.calcHist(
+        [today_color_spaces["hsv"]], [0, 1], None, [50, 60], [0, 180, 0, 256]
+    )
+    cv2.normalize(yesterday_hist, yesterday_hist, alpha=1.0, norm_type=cv2.NORM_L1)
+    cv2.normalize(today_hist, today_hist, alpha=1.0, norm_type=cv2.NORM_L1)
+    distance = cv2.compareHist(yesterday_hist, today_hist, cv2.HISTCMP_BHATTACHARYYA)
+    return round(float(distance), 2)
+
+
+def compute_experimental_features(
+    yesterday_color_spaces: dict[str, np.ndarray],
+    today_color_spaces: dict[str, np.ndarray],
+) -> dict[str, float]:
+    """Compute debug-only non-diagnostic visual features for the ROI pair."""
+    return {
+        "brightness_delta": brightness_delta(yesterday_color_spaces, today_color_spaces),
+        "lab_color_delta": lab_color_delta(yesterday_color_spaces, today_color_spaces),
+        "edge_change": edge_change(yesterday_color_spaces, today_color_spaces),
+        "histogram_change": histogram_change(yesterday_color_spaces, today_color_spaces),
+    }
+
+
 def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object]:
     """Compare two wound photos and return a visual-change result dict.
 
@@ -443,6 +506,9 @@ def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object
     visual_support_score = max(features["wound_area_delta"], features["combined_border_change"])
     change_score = max(redness_score, visual_support_score)
     warnings = comparability_warnings(yesterday_color_spaces, today_color_spaces, features)
+    experimental_features = compute_experimental_features(
+        yesterday_color_spaces, today_color_spaces
+    )
 
     debug: dict[str, object] = {
         "method": "multi_feature_visual_change_roi",
@@ -465,6 +531,7 @@ def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object
         "note": "non-diagnostic visual features only",
         "warnings": warnings,
         "color_spaces_used": ["BGR", "RGB", "HSV", "LAB", "YCrCb", "grayscale"],
+        "experimental_features": experimental_features,
         "preprocessing": {
             "target_width": TARGET_WIDTH,
             "roi_fraction": ROI_FRACTION,
