@@ -1,0 +1,5 @@
+# Dev-only deps (not needed at runtime / on Render). Install with:
+#   pip install -r requirements-dev.txt
+# Run the backend tests with:
+#   python -m pytest
+pytest>=8.0

@@ -222,7 +222,7 @@ No LLM calls
 No clinical validation
 ```
 
-Patient data is hardcoded demo data. Submitted check-ins and uploaded photos persist to local disk only.
+Patient data is hardcoded demo data. Submitted check-ins, uploaded photos, and doctor reviews persist to local JSON/file storage only. On Render this storage is **ephemeral** — see [Persistence on Render](#persistence-on-render).
 
 ---
 
@@ -567,6 +567,8 @@ The following are local/demo runtime artifacts and should not be committed:
 uploads/
 checkins.json
 checkins.json.tmp
+doctor_reviews.json
+doctor_reviews.json.tmp
 test_images/
 ```
 
@@ -584,6 +586,34 @@ npm run --prefix frontend build
 ```bash
 curl -s http://localhost:5000/health | python -m json.tool
 ```
+
+### Backend tests
+
+Happy/sad-path smoke tests for `/assess`, `/patient/<id>/review`, and `/checkins`:
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+Tests redirect persistence to a temp dir, so they never touch real runtime data.
+
+### Python version
+
+The backend uses `X | None` type syntax and requires **Python 3.11+** (3.9 fails
+to import `analyze.py`). Pinned via `runtime.txt` and `.python-version`.
+
+### Persistence on Render
+
+Check-ins, uploaded photos, and doctor reviews are stored as local files
+(`checkins.json`, `uploads/`, `doctor_reviews.json`). **Render's filesystem is
+ephemeral**: these reset on every deploy and container restart. This is accepted
+for the demo (no database, per scope). Practical guidance:
+
+* Do not redeploy right before a live demo — it wipes submitted data.
+* Data created during a running session lasts until the next restart.
+* For durable storage, attach a Render persistent disk or add a database
+  (out of hackathon scope).
 
 ```bash
 curl -s -X POST http://localhost:5000/analyze-real \
