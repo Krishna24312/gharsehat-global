@@ -527,6 +527,98 @@ def visual_region_localization(
     }
 
 
+def compute_confidence(
+    warnings: list[str],
+    localization: dict[str, object],
+    features: dict[str, object],
+    yesterday_roi_area: int,
+    today_roi_area: int,
+) -> dict[str, object]:
+    """Compute deterministic debug-only confidence for image comparability."""
+    warning_count = len(warnings)
+    used_localized_region = bool(localization["used_localized_region"])
+    yesterday_region_fraction = float(
+        localization["visual_region_area_fraction_yesterday"]
+    )
+    today_region_fraction = float(localization["visual_region_area_fraction_today"])
+    combined_area_yesterday = int(features["combined_area_yesterday"])
+    combined_area_today = int(features["combined_area_today"])
+
+    sufficient_region_area = (
+        yesterday_region_fraction >= 0.01 and today_region_fraction >= 0.01
+    )
+    non_empty_masks = combined_area_yesterday > 0 and combined_area_today > 0
+    yesterday_combined_fraction = combined_area_yesterday / max(yesterday_roi_area, 1)
+    today_combined_fraction = combined_area_today / max(today_roi_area, 1)
+    very_small_combined_area = (
+        yesterday_combined_fraction < TINY_VISUAL_REGION_FRACTION
+        or today_combined_fraction < TINY_VISUAL_REGION_FRACTION
+    )
+
+    score = 100
+    score -= 15 * warning_count
+    if not used_localized_region:
+        score -= 20
+    if not sufficient_region_area:
+        score -= 15
+    if not non_empty_masks:
+        score -= 25
+    if very_small_combined_area:
+        score -= 10
+    score = int(clamp(score))
+
+    if score >= 75:
+        level = "high"
+    elif score >= 45:
+        level = "medium"
+    else:
+        level = "low"
+
+    reasons: list[str] = []
+    if used_localized_region:
+        reasons.append("visual_region_detected")
+    if warning_count == 0:
+        reasons.append("photo_pair_comparable")
+    if sufficient_region_area:
+        reasons.append("sufficient_visual_region_area")
+    if non_empty_masks:
+        reasons.append("non_empty_visual_masks")
+
+    cautions: list[str] = []
+    if warning_count > 0:
+        cautions.append("image_pair_has_comparability_warnings")
+    if not used_localized_region:
+        cautions.append("localized_region_fallback_used")
+    if not sufficient_region_area or very_small_combined_area:
+        cautions.append("tiny_visual_region")
+    if not non_empty_masks:
+        cautions.append("empty_visual_mask")
+
+    return {
+        "score": score,
+        "level": level,
+        "reasons": reasons,
+        "cautions": cautions,
+        "confidence_inputs": {
+            "warning_count": warning_count,
+            "used_localized_region": used_localized_region,
+            "visual_region_area_fraction_yesterday": round(
+                yesterday_region_fraction, 4
+            ),
+            "visual_region_area_fraction_today": round(today_region_fraction, 4),
+            "combined_area_yesterday": combined_area_yesterday,
+            "combined_area_today": combined_area_today,
+            "roi_area": min(yesterday_roi_area, today_roi_area),
+            "roi_area_yesterday": yesterday_roi_area,
+            "roi_area_today": today_roi_area,
+            "combined_area_fraction_yesterday": round(
+                yesterday_combined_fraction, 4
+            ),
+            "combined_area_fraction_today": round(today_combined_fraction, 4),
+        },
+    }
+
+
 def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object]:
     """Compare two wound photos and return a visual-change result dict.
 
@@ -614,6 +706,13 @@ def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object
         features["_combined_mask_yesterday"],
         features["_combined_mask_today"],
     )
+    confidence = compute_confidence(
+        warnings,
+        localization,
+        features,
+        yesterday_roi_area=int(yesterday_color_spaces["gray"].size),
+        today_roi_area=int(today_color_spaces["gray"].size),
+    )
 
     debug: dict[str, object] = {
         "method": "multi_feature_visual_change_roi",
@@ -638,6 +737,7 @@ def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object
         "color_spaces_used": ["BGR", "RGB", "HSV", "LAB", "YCrCb", "grayscale"],
         "experimental_features": experimental_features,
         "visual_region_localization": localization,
+        "confidence": confidence,
         "preprocessing": {
             "target_width": TARGET_WIDTH,
             "roi_fraction": ROI_FRACTION,
