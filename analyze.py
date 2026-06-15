@@ -50,6 +50,11 @@ BRIGHTNESS_MISMATCH_THRESHOLD = 35.0
 LOW_SATURATION_ROI_THRESHOLD = 25.0
 TINY_VISUAL_REGION_FRACTION = 0.005
 
+# Debug-only visual-region localization. These values do not affect visual
+# metrics, warnings, experimental features, or scoring.
+MIN_LOCALIZED_VISUAL_REGION_PIXELS = 100
+VISUAL_REGION_PADDING_PX = 12
+
 # Supporting non-diagnostic visual features (dark / yellow / combined region).
 # These describe visual area change only — never necrosis, pus, slough, or
 # depth. Dark = very low brightness; yellow/cream = warm mid-hue region.
@@ -327,6 +332,9 @@ def compute_visual_features(
         "combined_area_today": combined_t,
         "combined_bbox_yesterday": combined_bbox_y,
         "combined_bbox_today": combined_bbox_t,
+        # Internal masks reused by debug-only visual-region localization.
+        "_combined_mask_yesterday": combined_y_mask,
+        "_combined_mask_today": combined_t_mask,
     }
 
 
@@ -426,6 +434,99 @@ def compute_experimental_features(
     }
 
 
+def largest_visual_region(mask: np.ndarray) -> tuple[dict[str, int] | None, int]:
+    """Return the largest meaningful connected visual region and its pixel area."""
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        (mask > 0).astype(np.uint8), connectivity=8
+    )
+    if count <= 1:
+        return None, 0
+
+    largest_label = max(
+        range(1, count),
+        key=lambda label: int(stats[label, cv2.CC_STAT_AREA]),
+    )
+    area = int(stats[largest_label, cv2.CC_STAT_AREA])
+    if area < MIN_LOCALIZED_VISUAL_REGION_PIXELS:
+        return None, area
+
+    return (
+        {
+            "x": int(stats[largest_label, cv2.CC_STAT_LEFT]),
+            "y": int(stats[largest_label, cv2.CC_STAT_TOP]),
+            "width": int(stats[largest_label, cv2.CC_STAT_WIDTH]),
+            "height": int(stats[largest_label, cv2.CC_STAT_HEIGHT]),
+        },
+        area,
+    )
+
+
+def padded_region_box(
+    box: dict[str, int], mask: np.ndarray, padding_px: int = VISUAL_REGION_PADDING_PX
+) -> dict[str, int]:
+    """Pad a visual-region box while keeping it inside the resized central ROI."""
+    roi_height, roi_width = mask.shape[:2]
+    x0 = max(0, box["x"] - padding_px)
+    y0 = max(0, box["y"] - padding_px)
+    x1 = min(roi_width, box["x"] + box["width"] + padding_px)
+    y1 = min(roi_height, box["y"] + box["height"] + padding_px)
+    return {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0}
+
+
+def visual_region_localization(
+    yesterday_mask: np.ndarray, today_mask: np.ndarray
+) -> dict[str, object]:
+    """Build debug-only localization metadata from the combined visual masks."""
+    yesterday_box, yesterday_area = largest_visual_region(yesterday_mask)
+    today_box, today_area = largest_visual_region(today_mask)
+
+    missing_yesterday = yesterday_box is None
+    missing_today = today_box is None
+    used_localized_region = not missing_yesterday and not missing_today
+
+    if used_localized_region:
+        fallback_reason = None
+        yesterday_output_box = padded_region_box(yesterday_box, yesterday_mask)
+        today_output_box = padded_region_box(today_box, today_mask)
+    else:
+        if missing_yesterday and missing_today:
+            fallback_reason = "no_meaningful_visual_region_in_both_images"
+        elif missing_yesterday:
+            fallback_reason = "no_meaningful_visual_region_in_yesterday_image"
+        else:
+            fallback_reason = "no_meaningful_visual_region_in_today_image"
+        yesterday_height, yesterday_width = yesterday_mask.shape[:2]
+        today_height, today_width = today_mask.shape[:2]
+        yesterday_output_box = {
+            "x": 0,
+            "y": 0,
+            "width": int(yesterday_width),
+            "height": int(yesterday_height),
+        }
+        today_output_box = {
+            "x": 0,
+            "y": 0,
+            "width": int(today_width),
+            "height": int(today_height),
+        }
+
+    yesterday_fraction = yesterday_area / max(int(yesterday_mask.size), 1)
+    today_fraction = today_area / max(int(today_mask.size), 1)
+    return {
+        "method": "combined_visual_mask_largest_region",
+        "coordinate_space": "resized_central_roi",
+        "used_localized_region": used_localized_region,
+        "fallback_reason": fallback_reason,
+        "yesterday_visual_region_box": yesterday_output_box,
+        "today_visual_region_box": today_output_box,
+        "visual_region_area_yesterday": yesterday_area,
+        "visual_region_area_today": today_area,
+        "visual_region_area_fraction_yesterday": round(yesterday_fraction, 4),
+        "visual_region_area_fraction_today": round(today_fraction, 4),
+        "padding_px": VISUAL_REGION_PADDING_PX,
+    }
+
+
 def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object]:
     """Compare two wound photos and return a visual-change result dict.
 
@@ -509,6 +610,10 @@ def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object
     experimental_features = compute_experimental_features(
         yesterday_color_spaces, today_color_spaces
     )
+    localization = visual_region_localization(
+        features["_combined_mask_yesterday"],
+        features["_combined_mask_today"],
+    )
 
     debug: dict[str, object] = {
         "method": "multi_feature_visual_change_roi",
@@ -532,6 +637,7 @@ def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object
         "warnings": warnings,
         "color_spaces_used": ["BGR", "RGB", "HSV", "LAB", "YCrCb", "grayscale"],
         "experimental_features": experimental_features,
+        "visual_region_localization": localization,
         "preprocessing": {
             "target_width": TARGET_WIDTH,
             "roi_fraction": ROI_FRACTION,
