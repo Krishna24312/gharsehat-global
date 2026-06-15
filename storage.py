@@ -57,6 +57,38 @@ def append_checkin(entry: dict) -> None:
     save_submitted_checkins(SUBMITTED_CHECKINS)
 
 
+# --- Doctor reviews (same local JSON style as check-ins above) ---
+REVIEWS_FILE = os.path.join(BASE_DIR, "doctor_reviews.json")
+
+
+def load_doctor_reviews() -> list:
+    """Load persisted doctor reviews; return [] if the file is missing or corrupt."""
+    try:
+        with open(REVIEWS_FILE, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+# Rebuilt from disk on import; mutated in place by append_review.
+DOCTOR_REVIEWS: list = load_doctor_reviews()
+
+
+def save_doctor_reviews(reviews: list) -> None:
+    """Persist doctor reviews atomically (write .tmp, then os.replace)."""
+    tmp_path = REVIEWS_FILE + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        json.dump(reviews, handle, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, REVIEWS_FILE)
+
+
+def append_review(entry: dict) -> None:
+    """Append a doctor review to the in-memory list and persist it."""
+    DOCTOR_REVIEWS.append(entry)
+    save_doctor_reviews(DOCTOR_REVIEWS)
+
+
 def safe_extension(filename: str) -> str:
     """Return a lowercase jpg/jpeg/png extension, or raise StorageError.
 

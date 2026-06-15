@@ -21,8 +21,10 @@ __pycache__/
 # Logs
 *.log
 
-# Demo runtime data (caregiver uploads + submitted check-ins)
+# Demo runtime data (caregiver uploads + submitted check-ins + doctor reviews)
 test_images/
 uploads/
 checkins.json
 checkins.json.tmp
+doctor_reviews.json
+doctor_reviews.json.tmp

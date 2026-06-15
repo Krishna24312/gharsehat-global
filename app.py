@@ -23,6 +23,7 @@ from storage import (
     UPLOADS_DIR,
     StorageError,
     append_checkin,
+    append_review,
     get_checkins_for_patient,
     get_latest_checkin_for_patient,
     parse_float,
@@ -36,6 +37,17 @@ CORS(app)  # Allow all origins — hackathon prototype.
 
 # Triage ordering for the doctor portal: red first, then amber, then green.
 STATUS_ORDER: dict[str, int] = {"red": 0, "amber": 1, "green": 2}
+
+# Allowed doctor review actions for POST /patient/<id>/review. These record the
+# doctor's chosen next step for the caregiver — they are decisions, not diagnoses.
+DOCTOR_ACTIONS: frozenset[str] = frozenset(
+    {
+        "continue_home_care",
+        "request_new_photo",
+        "recommend_clinic_visit",
+        "escalate_urgent_review",
+    }
+)
 
 # Built React frontend, produced by `npm run build` inside frontend/.
 DIST_DIR = os.path.join(os.path.dirname(__file__), "frontend", "dist")
@@ -337,6 +349,70 @@ def submit_checkin() -> Response | tuple[Response, int]:
         ),
         201,
     )
+
+
+def _optional_text(value: object) -> str | None:
+    """Normalise an optional free-text field: trimmed string, or None.
+
+    Returns None for a missing/blank value. Raises ValueError if a non-string,
+    non-null value is supplied so the route can reply 400.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("must be text")
+    return value.strip() or None
+
+
+@app.route("/patient/<patient_id>/review", methods=["POST"])
+def submit_review(patient_id: str) -> Response | tuple[Response, int]:
+    """Save a doctor's review/action for a patient (local JSON persistence).
+
+    The doctor portal updates silently; this records the doctor's chosen next
+    step plus optional free-text notes for later reference. It stores the
+    doctor's decision only — it does not diagnose. Existing check-in storage
+    and the /patients and /patient/<id>/history endpoints are untouched.
+    """
+    if patient_id not in PATIENTS:
+        return jsonify({"error": "patient not found"}), 404
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Request body must be a JSON object."}), 400
+
+    doctor_action = payload.get("doctor_action")
+    if doctor_action not in DOCTOR_ACTIONS:
+        allowed = ", ".join(sorted(DOCTOR_ACTIONS))
+        return jsonify({"error": f"doctor_action must be one of: {allowed}."}), 400
+
+    try:
+        doctor_note = _optional_text(payload.get("doctor_note"))
+        aftercare_instruction = _optional_text(payload.get("aftercare_instruction"))
+    except ValueError:
+        return jsonify({"error": "doctor_note and aftercare_instruction must be text."}), 400
+
+    checkin_id = payload.get("checkin_id")
+    if checkin_id is not None and not isinstance(checkin_id, str):
+        return jsonify({"error": "checkin_id must be a string if provided."}), 400
+    # Normalise like the free-text fields: a blank checkin_id is "not provided",
+    # never a stored empty-string id.
+    if isinstance(checkin_id, str):
+        checkin_id = checkin_id.strip() or None
+
+    review = {
+        "review_id": uuid.uuid4().hex,
+        "patient_id": patient_id,
+        "reviewed": True,
+        "doctor_action": doctor_action,
+        "doctor_note": doctor_note,
+        "aftercare_instruction": aftercare_instruction,
+        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if checkin_id is not None:
+        review["checkin_id"] = checkin_id
+    append_review(review)
+
+    return jsonify({"saved": True, "review": review}), 201
 
 
 @app.route("/static/<path:filename>", methods=["GET"])
