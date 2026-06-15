@@ -126,6 +126,28 @@ export interface HistoryEntry {
   combined_border_change?: number;
 }
 
+// Doctor review actions (POST /patient/<id>/review). Next-step decisions plus
+// optional guidance for the caregiver — never a diagnosis. Must match the
+// backend's DOCTOR_ACTIONS set.
+export type DoctorAction =
+  | "continue_home_care"
+  | "request_new_photo"
+  | "recommend_clinic_visit"
+  | "escalate_urgent_review";
+
+// A saved doctor review, as returned in PatientHistory.latest_review and by the
+// review endpoint.
+export interface DoctorReview {
+  review_id: string;
+  patient_id: string;
+  reviewed: boolean;
+  doctor_action: DoctorAction;
+  doctor_note: string | null;
+  aftercare_instruction: string | null;
+  reviewed_at: string;
+  checkin_id?: string;
+}
+
 // GET /patient/<id>/history response.
 export interface PatientHistory {
   id: string;
@@ -136,4 +158,7 @@ export interface PatientHistory {
   burn_type: string;
   day_of_recovery: number;
   history: HistoryEntry[];
+  // Latest doctor review for this patient, or null if none yet. Optional for
+  // backward compatibility with older backends.
+  latest_review?: DoctorReview | null;
 }

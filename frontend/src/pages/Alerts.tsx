@@ -1,6 +1,7 @@
 import { BellRing, Phone, ShieldCheck, Stethoscope } from "lucide-react";
 import { Card, ErrorState, Spinner } from "../components/common";
 import { Disclaimer } from "../components/Disclaimer";
+import { DoctorGuidanceCard } from "../components/DoctorGuidanceCard";
 import { DoctorSyncNote } from "../components/DoctorSyncNote";
 import { Layout } from "../components/Layout";
 import { StatusBadge } from "../components/StatusBadge";
@@ -64,6 +65,8 @@ export function Alerts() {
             {tr("Status from the latest check-in.", "नवीनतम चेक-इन की स्थिति।")}
           </p>
         </div>
+
+        <DoctorGuidanceCard review={data?.latest_review} />
 
         {waitingOnBackend && loading && <Spinner label={tr("Loading…", "लोड हो रहा है…")} />}
 

@@ -1,5 +1,9 @@
 import { API_BASE_URL } from "../config";
-import type { Status, SymptomKey, Symptoms } from "../types";
+import type { DoctorAction, DoctorReview, Status, SymptomKey, Symptoms } from "../types";
+
+// Re-export the shared review types so portal code keeps importing them from the
+// doctor API module.
+export type { DoctorAction, DoctorReview };
 
 export type TriageStatus = Status;
 
@@ -47,6 +51,8 @@ export interface PatientDetail {
   burn_type: string;
   day_of_recovery: number;
   history: DoctorHistoryEntry[];
+  // Latest doctor review for this patient, or null if none yet.
+  latest_review?: DoctorReview | null;
 }
 
 export const STATUS_RANK: Record<TriageStatus, number> = { red: 0, amber: 1, green: 2 };
@@ -66,6 +72,45 @@ export async function fetchPatients(): Promise<PatientSummary[]> {
 export async function fetchPatientHistory(id: string): Promise<PatientDetail> {
   const response = await fetch(`${API_BASE_URL}/patient/${id}/history`);
   return asJson<PatientDetail>(response);
+}
+
+// --- Doctor review / action (POST /patient/<id>/review) --------------------
+// DoctorAction / DoctorReview live in ../types and are re-exported above.
+// Ordered low -> high urgency, with portal labels.
+export const DOCTOR_ACTION_OPTIONS: Array<{ value: DoctorAction; label: string }> = [
+  { value: "continue_home_care", label: "Continue home care" },
+  { value: "request_new_photo", label: "Request new photo" },
+  { value: "recommend_clinic_visit", label: "Recommend clinic visit" },
+  { value: "escalate_urgent_review", label: "Escalate urgent review" },
+];
+
+export interface ReviewInput {
+  patientId: string;
+  doctorAction: DoctorAction;
+  doctorNote?: string;
+  aftercareInstruction?: string;
+  checkinId?: string;
+}
+
+export interface ReviewResponse {
+  saved: boolean;
+  review: DoctorReview;
+}
+
+export async function submitReview(input: ReviewInput): Promise<ReviewResponse> {
+  // Send only the fields the doctor actually filled in; the backend treats the
+  // text fields and checkin_id as optional.
+  const body: Record<string, unknown> = { doctor_action: input.doctorAction };
+  if (input.doctorNote) body.doctor_note = input.doctorNote;
+  if (input.aftercareInstruction) body.aftercare_instruction = input.aftercareInstruction;
+  if (input.checkinId) body.checkin_id = input.checkinId;
+
+  const response = await fetch(`${API_BASE_URL}/patient/${input.patientId}/review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return asJson<ReviewResponse>(response);
 }
 
 export function symptomLabels(): Array<{ key: SymptomKey; label: string }> {

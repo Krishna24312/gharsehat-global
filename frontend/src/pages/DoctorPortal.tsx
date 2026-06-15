@@ -5,6 +5,8 @@ import {
   AlertTriangle,
   ArrowLeft,
   CalendarDays,
+  CheckCircle2,
+  ClipboardList,
   HeartPulse,
   ImageOff,
   Info,
@@ -12,11 +14,13 @@ import {
   MapPin,
   RefreshCw,
   Search,
+  Send,
   ShieldAlert,
   Stethoscope,
   User,
 } from "lucide-react";
 import {
+  DOCTOR_ACTION_OPTIONS,
   fetchPatientHistory,
   fetchPatients,
   formatDate,
@@ -25,8 +29,11 @@ import {
   priorityLabel,
   resolvePhotoUrl,
   STATUS_RANK,
+  submitReview,
   symptomLabels,
+  type DoctorAction,
   type DoctorHistoryEntry,
+  type DoctorReview,
   type PatientDetail,
   type PatientSummary,
   type TriageStatus,
@@ -568,6 +575,13 @@ function DetailPanel({
 
       {latest && <AdvancedPhotoAnalysis entry={latest} />}
 
+      <DoctorReviewPanel
+        key={data.id}
+        patientId={data.id}
+        checkinId={latest?.checkin_id}
+        latestReview={data.latest_review}
+      />
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <div className="flex gap-3 rounded-2xl border border-sky-100 bg-sky-50 p-4">
           <Info className="mt-0.5 h-5 w-5 shrink-0 text-sky-700" />
@@ -648,6 +662,190 @@ function AdvancedPhotoAnalysis({ entry }: { entry: DoctorHistoryEntry }) {
           <p className="text-[11px] text-stone-500">Non-diagnostic visual features for doctor review.</p>
         </div>
       </details>
+    </DoctorCard>
+  );
+}
+
+// True when an ISO timestamp falls on the local calendar's today.
+function isToday(iso: string): boolean {
+  const date = new Date(iso);
+  const now = new Date();
+  return (
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  );
+}
+
+/**
+ * Doctor review / action panel for the selected patient.
+ *
+ * Lets the doctor record a next-step action plus optional free-text note and
+ * aftercare instruction, persisted via POST /patient/<id>/review. It links to
+ * the latest check-in when one exists. Records a decision only — never a
+ * diagnosis. Remounted per patient (keyed on id) so state never leaks across
+ * patients.
+ */
+function DoctorReviewPanel({
+  patientId,
+  checkinId,
+  latestReview,
+}: {
+  patientId: string;
+  checkinId?: string;
+  latestReview?: DoctorReview | null;
+}) {
+  const [action, setAction] = useState<DoctorAction>(
+    latestReview?.doctor_action ?? "continue_home_care",
+  );
+  const [note, setNote] = useState("");
+  const [aftercare, setAftercare] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [saved, setSaved] = useState<DoctorReview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Newest review to display: the one just saved this session, else the one
+  // loaded from history. Drives the "Reviewed today" state and survives reload.
+  const effectiveLatest = saved ?? latestReview ?? null;
+  const reviewedToday = effectiveLatest ? isToday(effectiveLatest.reviewed_at) : false;
+
+  async function handleSubmit() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await submitReview({
+        patientId,
+        doctorAction: action,
+        doctorNote: note.trim() || undefined,
+        aftercareInstruction: aftercare.trim() || undefined,
+        checkinId,
+      });
+      setSaved(result.review);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save review");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const textareaClass =
+    "mt-1 w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-stone-700 outline-none transition placeholder:text-stone-400 focus:border-brand/40 focus:ring-4 focus:ring-brand/10";
+
+  return (
+    <DoctorCard className="p-4 md:p-5">
+      <div className="mb-1 flex items-center gap-2">
+        <ClipboardList className="h-4 w-4 text-brand" />
+        <h3 className="text-sm font-bold text-stone-900">Doctor review &amp; action</h3>
+      </div>
+      <p className="mb-3 text-[11px] text-stone-500">
+        Record your next step and optional guidance for the caregiver. This is a review decision, not a diagnosis.
+      </p>
+
+      {effectiveLatest && (
+        <div className="mb-3 rounded-xl border border-stone-200 bg-stone-50 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-stone-400">Last review</span>
+            {reviewedToday ? (
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700">
+                Reviewed today
+              </span>
+            ) : (
+              <span className="text-[11px] text-stone-400">{formatDate(effectiveLatest.reviewed_at)}</span>
+            )}
+          </div>
+          <p className="mt-1 text-sm font-bold text-stone-800">
+            {DOCTOR_ACTION_OPTIONS.find((option) => option.value === effectiveLatest.doctor_action)?.label ??
+              effectiveLatest.doctor_action}
+          </p>
+          {effectiveLatest.doctor_note && (
+            <p className="mt-1 text-[13px] text-stone-600">{effectiveLatest.doctor_note}</p>
+          )}
+          {effectiveLatest.aftercare_instruction && (
+            <p className="mt-1 text-[13px] text-stone-600">
+              <span className="font-semibold text-stone-500">Aftercare: </span>
+              {effectiveLatest.aftercare_instruction}
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {DOCTOR_ACTION_OPTIONS.map((option) => {
+          const active = action === option.value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => setAction(option.value)}
+              className={`rounded-xl border px-3 py-2 text-left text-sm font-semibold transition ${
+                active
+                  ? "border-brand bg-brand/5 text-brand ring-2 ring-brand/20"
+                  : "border-stone-200 bg-white text-stone-600 hover:border-brand/40"
+              }`}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <label className="mt-3 block text-[11px] font-bold uppercase tracking-wide text-stone-400">
+        Doctor note (optional)
+      </label>
+      <textarea
+        value={note}
+        onChange={(event) => setNote(event.target.value)}
+        rows={2}
+        placeholder="e.g. Please upload a clearer photo tomorrow in natural light."
+        className={textareaClass}
+      />
+
+      <label className="mt-3 block text-[11px] font-bold uppercase tracking-wide text-stone-400">
+        Aftercare instruction (optional)
+      </label>
+      <textarea
+        value={aftercare}
+        onChange={(event) => setAftercare(event.target.value)}
+        rows={2}
+        placeholder="e.g. Continue dressing care as advised at discharge."
+        className={textareaClass}
+      />
+
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={submitting}
+          className="inline-flex items-center gap-2 rounded-xl bg-brand px-4 py-2 text-sm font-bold text-white shadow-card transition hover:opacity-90 disabled:opacity-60"
+        >
+          <Send className="h-4 w-4" />
+          {submitting ? "Saving…" : "Save review"}
+        </button>
+        {checkinId ? (
+          <span className="text-[11px] text-stone-400">Linked to latest check-in</span>
+        ) : (
+          <span className="text-[11px] text-stone-400">Not linked to a specific check-in</span>
+        )}
+      </div>
+
+      {saved && (
+        <div className="mt-3 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-[13px] text-emerald-800">
+          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <p className="font-bold">Review saved</p>
+            <p className="mt-0.5">
+              {DOCTOR_ACTION_OPTIONS.find((option) => option.value === saved.doctor_action)?.label} ·{" "}
+              {formatDate(saved.reviewed_at)}
+            </p>
+          </div>
+        </div>
+      )}
+      {error && (
+        <div className="mt-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-[13px] text-red-800">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>{error}</p>
+        </div>
+      )}
     </DoctorCard>
   );
 }

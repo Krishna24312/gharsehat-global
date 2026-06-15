@@ -26,6 +26,7 @@ from storage import (
     append_review,
     get_checkins_for_patient,
     get_latest_checkin_for_patient,
+    get_latest_review_for_patient,
     parse_float,
     save_uploaded_image,
 )
@@ -254,6 +255,10 @@ def patient_history(patient_id: str) -> Response | tuple[Response, int]:
             "burn_type": patient["burn_type"],
             "day_of_recovery": patient["day_of_recovery"],
             "history": history,
+            # Latest doctor review (or null), so the doctor portal and the
+            # caregiver app can both show the doctor's last action/guidance
+            # without an extra request. Read-only — this never diagnoses.
+            "latest_review": get_latest_review_for_patient(patient_id),
         }
     )
 

@@ -89,6 +89,18 @@ def append_review(entry: dict) -> None:
     save_doctor_reviews(DOCTOR_REVIEWS)
 
 
+def get_reviews_for_patient(patient_id: str) -> list:
+    """All doctor reviews for a patient, sorted by reviewed_at ascending."""
+    items = [r for r in DOCTOR_REVIEWS if r.get("patient_id") == patient_id]
+    return sorted(items, key=lambda r: r.get("reviewed_at", ""))
+
+
+def get_latest_review_for_patient(patient_id: str) -> dict | None:
+    """The most recent doctor review for a patient, or None."""
+    items = get_reviews_for_patient(patient_id)
+    return items[-1] if items else None
+
+
 def safe_extension(filename: str) -> str:
     """Return a lowercase jpg/jpeg/png extension, or raise StorageError.
 

@@ -5,6 +5,7 @@ import { BottomNav } from "../components/BottomNav";
 import { CTAButton } from "../components/CTAButton";
 import { ErrorState, Spinner } from "../components/common";
 import { Disclaimer } from "../components/Disclaimer";
+import { DoctorGuidanceCard } from "../components/DoctorGuidanceCard";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { ProgressBar } from "../components/ProgressBar";
 import { useCheckIn } from "../context/CheckInContext";
@@ -114,6 +115,8 @@ function HomeBody({
 
   return (
     <>
+      <DoctorGuidanceCard review={data.latest_review} />
+
       <div className="rounded-xl border border-stone-200 bg-white p-4 shadow-card">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
