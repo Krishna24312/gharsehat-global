@@ -619,6 +619,161 @@ def compute_confidence(
     }
 
 
+def build_top_contributors(
+    metrics: dict[str, float],
+    localization: dict[str, object],
+    experimental_features: dict[str, float],
+) -> list[dict[str, object]]:
+    """Rank existing debug values without changing any visual calculation."""
+    fraction_change = float(
+        localization["visual_region_area_fraction_today"]
+    ) - float(localization["visual_region_area_fraction_yesterday"])
+    border_change_value = float(metrics["border_change"])
+    combined_border_change_value = float(metrics["combined_border_change"])
+
+    main_candidates = [
+        (
+            "redness_delta",
+            float(metrics["redness_delta"]),
+            "redness-like visual area changed between photos",
+            2,
+        ),
+        (
+            "dark_area_delta",
+            float(metrics["dark_area_delta"]),
+            "darker-area visual signal changed between photos",
+            2,
+        ),
+        (
+            "yellow_area_delta",
+            float(metrics["yellow_area_delta"]),
+            "yellow-area visual signal changed between photos",
+            2,
+        ),
+        (
+            "wound_area_delta",
+            float(metrics["wound_area_delta"]),
+            "combined visual-region area changed between photos",
+            2,
+        ),
+        (
+            "combined_border_change",
+            combined_border_change_value,
+            "combined visual-region border changed between photos",
+            2,
+        ),
+        (
+            "visual_region_area_fraction_change",
+            fraction_change,
+            "localized visual region occupied a different fraction of the image",
+            4,
+        ),
+    ]
+    if abs(border_change_value - combined_border_change_value) > 0.01:
+        main_candidates.insert(
+            1,
+            (
+                "border_change",
+                border_change_value,
+                "visual-region border changed between photos",
+                2,
+            ),
+        )
+    experimental_candidates = [
+        (
+            "histogram_change",
+            float(experimental_features["histogram_change"]),
+            "overall color distribution changed between photos",
+            2,
+        ),
+        (
+            "edge_change",
+            float(experimental_features["edge_change"]),
+            "edge-density pattern changed between photos",
+            2,
+        ),
+        (
+            "lab_color_delta",
+            float(experimental_features["lab_color_delta"]),
+            "perceptual color difference changed between photos",
+            2,
+        ),
+        (
+            "brightness_delta",
+            float(experimental_features["brightness_delta"]),
+            "overall brightness changed between photos",
+            2,
+        ),
+    ]
+
+    def ranked(
+        candidates: list[tuple[str, float, str, int]],
+    ) -> list[tuple[str, float, str, int]]:
+        return [
+            candidate
+            for _index, candidate in sorted(
+                enumerate(candidates),
+                key=lambda item: (-abs(item[1][1]), item[0]),
+            )
+        ]
+
+    ranked_main = ranked(main_candidates)
+    ranked_experimental = ranked(experimental_candidates)
+    fraction_candidate = next(
+        candidate
+        for candidate in ranked_main
+        if candidate[0] == "visual_region_area_fraction_change"
+    )
+    other_main = [
+        candidate
+        for candidate in ranked_main
+        if candidate[0] != "visual_region_area_fraction_change"
+    ]
+    meaningful_main = [candidate for candidate in other_main if abs(candidate[1]) > 1]
+    meaningful_experimental = [
+        candidate for candidate in ranked_experimental if abs(candidate[1]) > 1
+    ]
+    near_zero_main = [candidate for candidate in other_main if abs(candidate[1]) <= 1]
+    near_zero_experimental = [
+        candidate for candidate in ranked_experimental if abs(candidate[1]) <= 1
+    ]
+
+    selected = meaningful_main[:5]
+    if round(abs(fraction_candidate[1]), 4) > 0 and len(selected) < 5:
+        selected.append(fraction_candidate)
+    selected.extend(meaningful_experimental[: 5 - len(selected)])
+    if len(selected) < 3:
+        fallback_candidates = near_zero_main + near_zero_experimental
+        if fraction_candidate not in selected:
+            fallback_candidates.insert(0, fraction_candidate)
+        selected.extend(fallback_candidates[: 3 - len(selected)])
+
+    contributors: list[dict[str, object]] = []
+    for feature, value, reason, decimals in selected:
+        if feature == "visual_region_area_fraction_change":
+            if value > 0.005:
+                direction = "increase"
+            elif value < -0.005:
+                direction = "decrease"
+            else:
+                direction = "minimal_change"
+        elif value > 1:
+            direction = "increase"
+        elif value < -1:
+            direction = "decrease"
+        else:
+            direction = "minimal_change"
+        contributors.append(
+            {
+                "feature": feature,
+                "value": round(float(value), decimals),
+                "direction": direction,
+                "reason": reason,
+            }
+        )
+    return contributors
+
+
 def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object]:
     """Compare two wound photos and return a visual-change result dict.
 
@@ -713,6 +868,18 @@ def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object
         yesterday_roi_area=int(yesterday_color_spaces["gray"].size),
         today_roi_area=int(today_color_spaces["gray"].size),
     )
+    top_contributors = build_top_contributors(
+        {
+            "redness_delta": float(redness_delta),
+            "border_change": float(border_change),
+            "dark_area_delta": float(features["dark_area_delta"]),
+            "yellow_area_delta": float(features["yellow_area_delta"]),
+            "wound_area_delta": float(features["wound_area_delta"]),
+            "combined_border_change": float(features["combined_border_change"]),
+        },
+        localization,
+        experimental_features,
+    )
 
     debug: dict[str, object] = {
         "method": "multi_feature_visual_change_roi",
@@ -738,6 +905,7 @@ def analyze_pair(yesterday_bytes: bytes, today_bytes: bytes) -> dict[str, object
         "experimental_features": experimental_features,
         "visual_region_localization": localization,
         "confidence": confidence,
+        "top_contributors": top_contributors,
         "preprocessing": {
             "target_width": TARGET_WIDTH,
             "roi_fraction": ROI_FRACTION,
